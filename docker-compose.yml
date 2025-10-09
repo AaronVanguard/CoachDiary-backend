@@ -11,18 +11,32 @@ services:
       - POSTGRES_DB=${DB_NAME}
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB -h localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
 
   web:
     build: .
     restart: always
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     env_file:
       - ./.env
     environment:
@@ -42,9 +56,12 @@ services:
     build: .
     restart: always
     depends_on:
-      - db
-      - redis
-      - web
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      web:
+        condition: service_started
     env_file:
       - ./.env
     environment:
