@@ -86,3 +86,5 @@ local_settings.py
 staticfiles/
 .env
 db.sqlite3
+frontend-dist/
+.claude/

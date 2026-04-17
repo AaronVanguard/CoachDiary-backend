@@ -1,6 +1,14 @@
+x-app-env: &app-env
+  env_file:
+    - ./.env
+  environment:
+    - DB_HOST=db
+    - REDIS_HOST=redis
+
 services:
   db:
     image: postgres:15-alpine
+    restart: always
     volumes:
       - postgres_data:/var/lib/postgresql/data/
     env_file:
@@ -9,8 +17,6 @@ services:
       - POSTGRES_PASSWORD=${DB_PASSWORD}
       - POSTGRES_USER=${DB_USER}
       - POSTGRES_DB=${DB_NAME}
-    ports:
-      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB -h localhost"]
       interval: 5s
@@ -20,8 +26,10 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    restart: always
+    volumes:
+      - redis_data:/data
+    command: ["redis-server", "--appendonly", "yes"]
     healthcheck:
       test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
       interval: 5s
@@ -31,45 +39,61 @@ services:
 
   web:
     build: .
+    image: coachdiary-backend:latest
     restart: always
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
-    env_file:
-      - ./.env
-    environment:
-      - DB_HOST=db
-      - REDIS_HOST=redis
+    <<: *app-env
     volumes:
-      - .:/app
-    ports:
-      - "8000:8000"
+      - static_volume:/app/staticfiles
     command: >
-      sh -c "python manage.py makemigrations &&
-             python manage.py migrate &&
+      sh -c "python manage.py migrate --noinput &&
              python manage.py collectstatic --noinput &&
-             gunicorn CoachDiary_Backend.wsgi:application --bind 0.0.0.0:8000 --reload"
+             gunicorn CoachDiary_Backend.wsgi:application --bind 0.0.0.0:8000 --workers 3"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/', timeout=3).status < 500 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   celery_worker:
     build: .
+    image: coachdiary-backend:latest
     restart: always
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
-      web:
-        condition: service_started
+    <<: *app-env
+    command: celery -A CoachDiary_Backend worker -l info
+
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["prod"]
+    restart: always
+    depends_on:
+      - web
     env_file:
       - ./.env
-    environment:
-      - DB_HOST=db
-      - REDIS_HOST=redis
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
     volumes:
-      - .:/app
-    command: celery -A CoachDiary_Backend worker -l info
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - static_volume:/srv/static:ro
+      - ./frontend-dist:/srv/frontend:ro
+      - caddy_data:/data
+      - caddy_config:/config
 
 volumes:
   postgres_data:
+  redis_data:
+  static_volume:
+  caddy_data:
+  caddy_config:
