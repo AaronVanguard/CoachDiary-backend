@@ -132,44 +132,38 @@ class StudentResultSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         representation = super().to_representation(instance)
         standard_ids = self.context.get('standard_ids', [])
+        if not standard_ids:
+            return representation
 
-        if standard_ids:
-            values = []
-            grades = []
-            standards_details = []
+        standard_ids_int = [int(sid) for sid in standard_ids]
+        level_number = instance.student_class.number
+        gender = instance.gender
 
-            for standard_id in standard_ids:
-                try:
-                    student_standard = instance.standards.get(
-                        standard_id=standard_id,
-                        level__level_number=instance.student_class.number,
-                        level__gender=instance.gender
-                    )
+        results_by_standard = {
+            ss.standard_id: ss
+            for ss in instance.standards.filter(
+                standard_id__in=standard_ids_int,
+                level__level_number=level_number,
+                level__gender=gender,
+            )
+        }
 
-                    standard_detail = {
-                        'standard_id': int(standard_id),
-                        'value': student_standard.value,
-                        'grade': student_standard.grade
-                    }
+        values, grades, standards_details = [], [], []
+        for standard_id in standard_ids_int:
+            ss = results_by_standard.get(standard_id)
+            standards_details.append({
+                'standard_id': standard_id,
+                'value': ss.value if ss else None,
+                'grade': ss.grade if ss else None,
+            })
+            if ss and ss.value is not None:
+                values.append(ss.value)
+            if ss and ss.grade is not None:
+                grades.append(ss.grade)
 
-                    if student_standard.value is not None:
-                        values.append(student_standard.value)
-                    if student_standard.grade is not None:
-                        grades.append(student_standard.grade)
-
-                except:
-                    standard_detail = {
-                        'standard_id': int(standard_id),
-                        'value': None,
-                        'grade': None
-                    }
-
-                standards_details.append(standard_detail)
-
-            representation['average_value'] = sum(values) / len(values) if values else None
-            representation['average_grade'] = sum(grades) / len(grades) if grades else None
-            representation['standards_details'] = standards_details
-
+        representation['average_value'] = sum(values) / len(values) if values else None
+        representation['average_grade'] = sum(grades) / len(grades) if grades else None
+        representation['standards_details'] = standards_details
         return representation
 
 

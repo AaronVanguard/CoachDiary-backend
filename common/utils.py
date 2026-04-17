@@ -15,7 +15,6 @@ def link_callback(uri, rel):
     else:
         font_dir = os.path.join(settings.BASE_DIR, 'static/fonts')
         path = os.path.join(font_dir, os.path.basename(uri))
-        print(path)
     pisaFileObject.getNamedFile = lambda self: path
     if os.path.isfile(path):
         return path

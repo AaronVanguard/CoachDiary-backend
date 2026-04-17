@@ -8,6 +8,8 @@ from django.utils import timezone
 from common.models import AbstractLevel, AbstractStandard, BaseModel
 from users.models import User
 
+logger = logging.getLogger(__name__)
+
 
 class Standard(AbstractStandard):
     """
@@ -129,33 +131,32 @@ class StudentStandard(BaseModel):
         verbose_name="Дата записи"
     )
 
-    def save(self, *args, preserve_level=True, **kwargs):
+    GRADE_RECOMPUTE_FIELDS = frozenset({
+        'value', 'level', 'level_id', 'student', 'student_id', 'standard', 'standard_id',
+    })
+
+    def save(self, *args, **kwargs):
+        update_fields = kwargs.get('update_fields')
+        if update_fields is not None and not self.GRADE_RECOMPUTE_FIELDS.intersection(update_fields):
+            super().save(*args, **kwargs)
+            return
+
+        if self.level_id is None:
+            try:
+                self.level = Level.objects.get(
+                    standard=self.standard,
+                    level_number=self.student.student_class.number,
+                    gender=self.student.gender,
+                )
+            except Level.DoesNotExist:
+                logger.warning(
+                    "Level not found for standard '%s', class %s, gender '%s'.",
+                    self.standard.name, self.student.student_class.number, self.student.get_gender_display(),
+                )
+
+        self.grade = self.level.calculate_grade(self.value) if self.level_id else None
         if isinstance(self.grade, float):
             self.grade = round(self.grade)
-
-        student_class_number = self.student.student_class.number
-
-        if not preserve_level:
-            student_class_number = self.student.student_class.number
-        else:
-            student_class_number = self.level.level_number
-
-        try:
-            self.level = Level.objects.get(
-                standard=self.standard,
-                level_number=student_class_number,
-                gender=self.student.gender,
-            )
-        except Level.DoesNotExist:
-            logging.warning(
-                f"Уровень для норматива '{self.standard.name}', класса {student_class_number} "
-                f"и пола '{self.student.get_gender_display()}' не найден."
-            )
-            self.level = None
-        except Exception as e:
-            logging.error(f"Непредвиденная ошибка при сохранении результата: {e}")
-            self.level = None
-        self.grade = self.level.calculate_grade(self.value)
         super().save(*args, **kwargs)
 
     def __str__(self):

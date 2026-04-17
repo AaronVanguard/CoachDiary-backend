@@ -51,20 +51,12 @@ class StudentSerializer(serializers.ModelSerializer):
                   "invitation_link", "is_used_invitation")
 
     def get_invitation_link(self, obj):
-        try:
-            if hasattr(obj, 'invitation'):
-                return obj.invitation.get_join_link()
-            return None
-        except:
-            return None
+        invitation = getattr(obj, 'invitation', None)
+        return invitation.get_join_link() if invitation else None
 
     def get_is_used_invitation(self, obj):
-        try:
-            if hasattr(obj, 'invitation'):
-                return obj.invitation.is_used
-            return False
-        except:
-            return False
+        invitation = getattr(obj, 'invitation', None)
+        return bool(invitation and invitation.is_used)
 
     def create(self, validated_data):
         student_class_data = validated_data.pop('student_class')
@@ -94,19 +86,11 @@ class StudentSerializer(serializers.ModelSerializer):
         return instance
 
     def get_or_create_class(self, student_class_data, request_user):
-        class_instance = models.StudentClass.objects.filter(
+        class_instance, _ = models.StudentClass.objects.get_or_create(
             number=student_class_data['number'],
             class_name=student_class_data['class_name'],
-            class_owner=request_user
-        ).first()
-
-        if not class_instance:
-            class_instance = models.StudentClass.objects.create(
-                number=student_class_data['number'],
-                class_name=student_class_data['class_name'],
-                class_owner=request_user
-            )
-
+            class_owner=request_user,
+        )
         return class_instance
 
 

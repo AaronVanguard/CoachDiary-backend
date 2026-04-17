@@ -4,10 +4,9 @@ from drf_spectacular.utils import extend_schema, OpenApiParameter
 from rest_framework import mixins, viewsets, status
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from common.permissions import IsTeacher
+from common.permissions import IsTeacher, IsTeacherOrStudent
 from standards import models
 from students.models import Student
 from .serializers import StudentResultSerializer, StandardSerializer, StudentStandardCreateSerializer, \
@@ -139,31 +138,13 @@ class StandardValueViewSet(
             serializer.save(who_added_id=self.request.user.id)
 
     def perform_update(self, serializer):
-        """
-        Метод обновления норматива для сохранения связей с результатами студентов
-        """
         with transaction.atomic():
-            instance = self.get_object()
-            old_name = instance.name
-            new_name = serializer.validated_data.get('name', old_name)
-
-            if hasattr(models, 'StudentStandard'):
-                related_records = list(models.StudentStandard.objects.filter(standard=instance))
-            else:
-                related_records = []
-
-            updated_standard = serializer.save()
-
-            for record in related_records:
-                record.standard = updated_standard
-                record.save()
-
-            return updated_standard
+            serializer.save()
 
 
 class StudentStandardsViewSet(viewsets.ViewSet):
     serializer_class = StudentStandardsResponseSerializer
-    permission_classes = (IsAuthenticated,)
+    permission_classes = (IsTeacherOrStudent,)
 
     @extend_schema(
         summary="Результаты ученика по его нормативам",
@@ -179,54 +160,46 @@ class StudentStandardsViewSet(viewsets.ViewSet):
         ]
     )
     def list(self, request, student_id=None):
-        if hasattr(request.user, 'role') and request.user.role == 'teacher':
-            student = Student.objects.filter(id=student_id, student_class__class_owner=request.user).first()
+        user = request.user
+        if user.role == 'teacher':
+            student = Student.objects.filter(id=student_id, student_class__class_owner=user).first()
             if not student:
                 raise PermissionDenied("У вас нет прав доступа к этому студенту.")
-
             student_standards = models.StudentStandard.objects.filter(student=student)
-        elif hasattr(request.user, 'role') and request.user.role == 'student':
-            if not hasattr(request.user, 'student') or str(request.user.student.id) != str(student_id):
+        else:
+            own_student = getattr(user, 'student', None)
+            if not own_student or str(own_student.id) != str(student_id):
                 raise PermissionDenied("У вас нет прав доступа к стандартам этого студента.")
-
-            student = Student.global_objects.filter(id=request.user.student.id).first()
+            student = Student.global_objects.filter(id=own_student.id).first()
             if not student:
                 raise PermissionDenied("Студент не найден.")
+            manager = models.StudentStandard.global_objects if getattr(student, 'is_deleted', False) \
+                else models.StudentStandard.objects
+            student_standards = manager.filter(student=student)
 
-            if hasattr(student, 'is_deleted') and student.is_deleted:
-                student_standards = models.StudentStandard.global_objects.filter(student=student)
-            else:
-                student_standards = models.StudentStandard.objects.filter(student=student)
-        else:
-            raise PermissionDenied("У вас нет прав доступа к стандартам студентов.")
-
-        level_number = request.query_params.get('level_number')
-        if level_number:
+        level_number_raw = request.query_params.get('level_number')
+        if level_number_raw:
             try:
-                level_number = int(level_number)
+                level_number = int(level_number_raw)
             except ValueError:
                 return Response(
                     {"detail": "Параметр level_number должен быть числом"},
-                    status=status.HTTP_400_BAD_REQUEST
+                    status=status.HTTP_400_BAD_REQUEST,
                 )
         else:
             level_number = student.student_class.number
 
-        filtered_standards = student_standards.filter(level__level_number=level_number)
+        filtered_standards = list(
+            student_standards.filter(level__level_number=level_number).select_related('standard', 'level')
+        )
+        grades = [s.grade for s in filtered_standards if s.grade is not None]
+        summary_grade = sum(grades) / len(grades) if grades else 0
 
-        if filtered_standards.exists():
-            grades_with_values = [s.grade for s in filtered_standards if s.grade is not None]
-            summary_grade = sum(grades_with_values) / len(grades_with_values) if grades_with_values else 0
-        else:
-            summary_grade = 0
-
-        response_data = {
+        serializer = StudentStandardsResponseSerializer({
             'standards': filtered_standards,
             'summary_grade': summary_grade,
-            'level_number': level_number
-        }
-
-        serializer = StudentStandardsResponseSerializer(response_data)
+            'level_number': level_number,
+        })
         return Response(serializer.data)
 
 
